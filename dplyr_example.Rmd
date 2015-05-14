@@ -1,0 +1,120 @@
+---
+title: "Merge gtex summary statistics"
+output: html_document
+---
+
+Let's try merging some summary statistics for different tissues.
+
+```{r}
+#get a list of all 001 files 
+filelist001 = Sys.glob("data/sumstats/*001*")
+#set up empty data frame
+df=list()
+for(i in 1:length(filelist001)){
+  df[[i]] = read.table(filelist001[[i]],header=TRUE,stringsAsFactors=FALSE)
+}
+```
+
+Take a look at the dataframes
+```{r}
+  head(df[[1]])
+  head(df[[2]])
+```
+
+Get tissue names and add them as a column
+```{r}
+get_tissue_name=function(filename){
+  suffix = strsplit(filename,c("_sumstats_"))[[1]][2]
+  return(strsplit(suffix,".txt.gz")[[1]][1])
+}
+get_tissue_name(filelist001[1])
+tissuenames= unlist(lapply(filelist001,get_tissue_name))
+for(i in 1:length(df)){df[[i]]$tissue = tissuenames[i]}
+```
+
+
+
+Now take a look at dplyr. 
+Handy cheatsheet at 
+http://www.rstudio.com/wp-content/uploads/2015/02/data-wrangling-cheatsheet.pdf
+```{r}
+library(dplyr)
+library(tidyr)
+library(magrittr)
+```
+
+Merge our data into a single big datafram
+```{r}
+df = rbind_all(df)
+dim(df)
+```
+
+
+We can use mutate to add a column of t statistics
+```{r}
+head(mutate(df,t= betahat.geno/sebetahat.geno))
+```
+
+Or we can use the pipe operator %>% to do this (useful for stringing multiple commands together).
+ Note that x %>% f(y) is the same as f(x,y).
+That is x becomes the first argument to the function it is being piped to.
+```{r}
+df %>% mutate(t= betahat.geno/sebetahat.geno)
+```
+
+Note that this doesn't actually change df. To return the results of the pipe back to df we use
+```{r}
+df %<>% mutate(t= betahat.geno/sebetahat.geno)
+df
+```
+
+
+We can use unite to make the (gene,snp) combination into a single column, eqtl
+```{r}
+df %>% unite(eqtl, gene, snp,sep="::") 
+```
+
+
+We can group the observations for each eqtl and take the max of the absolute value of the t statistic
+```{r}
+eqtl_scores = df %>% 
+              unite(eqtl, gene, snp,sep="::") %>% 
+              group_by(eqtl) %>% 
+              summarize(tmax=max(abs(t)))
+head(eqtl_scores)
+```
+
+We can arrange them by the value of this statistic
+```{r}
+eqtl_scores %>% arrange(desc(tmax))
+```
+
+We can undo the unite to separate back into gene and SNP. Note the use of the %<>% operator from the magrittr library
+to assign result back to eqtl_scores.
+```{r}
+eqtl_scores %<>% separate(eqtl,into=c("gene","snp"),sep="::")
+```
+
+We can find the best eqtl in each gene
+```{r}
+top_eqtl = eqtl_scores %>% group_by(gene) %>% top_n(1,tmax)
+```
+
+Now we can filter the original dataframe to only contain the best eQTL in each gene, and add the tmax column
+using an inner_join
+```{r}
+test= df %>% inner_join(top_eqtl)
+```
+
+```{r}
+tstats = select(test, gene, snp, tissue,t)
+```
+
+Finally we can spread out the tissue t stats into "wide" format using spread
+```{r}
+tstats %<>% spread(tissue,t)
+tstats
+```
+
+
+
